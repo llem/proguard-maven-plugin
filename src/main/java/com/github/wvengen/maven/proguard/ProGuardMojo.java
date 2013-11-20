@@ -253,6 +253,13 @@ public class ProGuardMojo extends AbstractMojo {
 	 * @parameter default-value="proguard.ProGuard"
 	 */
 	protected String proguardMainClass = "proguard.ProGuard";
+        
+        /**
+          * Set this to true if the complete ProGuard configuration is included using the <tt>proguardInclude</tt> option.
+          * 
+          * @parameter default-value="false"
+          */
+        protected boolean completeConfigurationIncluded;
 
 	private Log log;
 
@@ -275,271 +282,278 @@ public class ProGuardMojo extends AbstractMojo {
 	public void execute() throws MojoExecutionException, MojoFailureException {
 
 		log = getLog();
+                ArrayList args = new ArrayList();
 
 		if (skip) {
 			log.info("Bypass ProGuard processing because \"proguard.skip=true\"");
 			return;
 		}
+                
+                if (proguardInclude != null) {
+                    if (proguardInclude.exists()) {
+                        args.add("-include");
+                        args.add(fileToString(proguardInclude));
+                        log.debug("proguardInclude " + proguardInclude);
+                    } else {
+                        log.debug("proguardInclude config does not exist " + proguardInclude);
+                    }
+                }
+                
+                // If a complete configuration has been included, just run ProGuard without processing any other configuration options
+                if (completeConfigurationIncluded) {
+                    log.info("Complete configuration file has been included -- ignoring other options...");
+                    log.info("execute ProGuard " + args.toString());
+                    proguardMain(getProguardJar(this), args, this);
+                }
+                else {
+                    boolean mainIsJar = mavenProject.getPackaging().equals("jar");
+                    boolean mainIsPom = mavenProject.getPackaging().equals("pom");
 
-		boolean mainIsJar = mavenProject.getPackaging().equals("jar");
-		boolean mainIsPom = mavenProject.getPackaging().equals("pom");
+                    File inJarFile = new File(outputDirectory, injar);
+                    if (mainIsJar && (!inJarFile.exists())) {
+                            if (injarNotExistsSkip) {
+                                    log.info("Bypass ProGuard processing because \"injar\" dos not exist");
+                                    return;
+                            }
+                            throw new MojoFailureException("Can't find file " + inJarFile);
+                    }
 
-		File inJarFile = new File(outputDirectory, injar);
-		if (mainIsJar && (!inJarFile.exists())) {
-			if (injarNotExistsSkip) {
-				log.info("Bypass ProGuard processing because \"injar\" dos not exist");
-				return;
-			}
-			throw new MojoFailureException("Can't find file " + inJarFile);
-		}
+                    if (mainIsPom && (!inJarFile.exists()) && injarNotExistsSkip) {
+                            log.info("Bypass ProGuard processing because \"injar\" dos not exist");
+                            return;
+                    }
 
-		if (mainIsPom && (!inJarFile.exists()) && injarNotExistsSkip) {
-			log.info("Bypass ProGuard processing because \"injar\" dos not exist");
-			return;
-		}
+                    if (!outputDirectory.exists()) {
+                            if (!outputDirectory.mkdirs()) {
+                                    throw new MojoFailureException("Can't create " + outputDirectory);
+                            }
+                    }
 
-		if (!outputDirectory.exists()) {
-			if (!outputDirectory.mkdirs()) {
-				throw new MojoFailureException("Can't create " + outputDirectory);
-			}
-		}
+                    File outJarFile;
+                    boolean sameArtifact;
 
-		File outJarFile;
-		boolean sameArtifact;
+                    if (attach) {
+                            outjar = nameNoType(injar);
+                            if (useArtifactClassifier()) {
+                                    outjar += "-" + attachArtifactClassifier;
+                            }
+                            outjar += "." + attachArtifactType;
+                    }
 
-		if (attach) {
-			outjar = nameNoType(injar);
-			if (useArtifactClassifier()) {
-				outjar += "-" + attachArtifactClassifier;
-			}
-			outjar += "." + attachArtifactType;
-		}
+                    if ((outjar != null) && (!outjar.equals(injar))) {
+                            sameArtifact = false;
+                            outJarFile = (new File(outputDirectory, outjar)).getAbsoluteFile();
+                            if (outJarFile.exists()) {
+                                if (!deleteFileOrDirectory(outJarFile)) {
+                                            throw new MojoFailureException("Can't delete " + outJarFile);
+                                    }
+                            }
+                    } else {
+                            sameArtifact = true;
+                            outJarFile = inJarFile.getAbsoluteFile();
+                            File baseFile;
+                            if (inJarFile.isDirectory()) {
+                                baseFile = new File(outputDirectory, nameNoType(injar) + "_proguard_base");
+                            } else {
+                                baseFile = new File(outputDirectory, nameNoType(injar) + "_proguard_base.jar");
+                        }
+                            if (baseFile.exists()) {
+                                    if (!deleteFileOrDirectory(baseFile)) {
+                                            throw new MojoFailureException("Can't delete " + baseFile);
+                                    }
+                            }
+                            if (inJarFile.exists()) {
+                                    if (!inJarFile.renameTo(baseFile)) {
+                                            throw new MojoFailureException("Can't rename " + inJarFile);
+                                    }
+                            }
+                            inJarFile = baseFile;
+                    }
 
-		if ((outjar != null) && (!outjar.equals(injar))) {
-			sameArtifact = false;
-			outJarFile = (new File(outputDirectory, outjar)).getAbsoluteFile();
-			if (outJarFile.exists()) {
-			    if (!deleteFileOrDirectory(outJarFile)) {
-					throw new MojoFailureException("Can't delete " + outJarFile);
-				}
-			}
-		} else {
-			sameArtifact = true;
-			outJarFile = inJarFile.getAbsoluteFile();
-			File baseFile;
-			if (inJarFile.isDirectory()) {
-			    baseFile = new File(outputDirectory, nameNoType(injar) + "_proguard_base");
-			} else {
-			    baseFile = new File(outputDirectory, nameNoType(injar) + "_proguard_base.jar");
-		    }
-			if (baseFile.exists()) {
-				if (!deleteFileOrDirectory(baseFile)) {
-					throw new MojoFailureException("Can't delete " + baseFile);
-				}
-			}
-			if (inJarFile.exists()) {
-				if (!inJarFile.renameTo(baseFile)) {
-					throw new MojoFailureException("Can't rename " + inJarFile);
-				}
-			}
-			inJarFile = baseFile;
-		}
+                    if (log.isDebugEnabled()) {
+                            List dependancy = mavenProject.getCompileArtifacts();
+                            for (Iterator i = dependancy.iterator(); i.hasNext();) {
+                                    Artifact artifact = (Artifact) i.next();
+                                    log.debug("--- compile artifact " + artifact.getGroupId() + ":" + artifact.getArtifactId() + ":"
+                                                    + artifact.getType() + ":" + artifact.getClassifier() + " Scope:" + artifact.getScope());
+                            }
+                            for (Iterator i = mavenProject.getArtifacts().iterator(); i.hasNext();) {
+                                    Artifact artifact = (Artifact) i.next();
+                                    log.debug("--- artifact " + artifact.getGroupId() + ":" + artifact.getArtifactId() + ":"
+                                                    + artifact.getType() + ":" + artifact.getClassifier() + " Scope:" + artifact.getScope());
+                            }
+                            for (Iterator i = mavenProject.getDependencies().iterator(); i.hasNext();) {
+                                    Dependency artifact = (Dependency) i.next();
+                                    log.debug("--- dependency " + artifact.getGroupId() + ":" + artifact.getArtifactId() + ":"
+                                                    + artifact.getType() + ":" + artifact.getClassifier() + " Scope:" + artifact.getScope());
+                            }
+                    }
 
-		ArrayList args = new ArrayList();
+                    Set inPath = new HashSet();
+                    boolean hasInclusionLibrary = false;
+                    if (assembly != null) {
+                            for (Iterator iter = assembly.inclusions.iterator(); iter.hasNext();) {
+                                    Inclusion inc = (Inclusion) iter.next();
+                                    if (!inc.library) {
+                                            File file = getClasspathElement(getDependancy(inc, mavenProject), mavenProject);
+                                            inPath.add(file.toString());
+                                            log.debug("--- ADD injars:" + inc.artifactId);
+                                            StringBuffer filter = new StringBuffer(fileToString(file));
+                                            filter.append("(!META-INF/MANIFEST.MF");
+                                            if (!addMavenDescriptor) {
+                                                    filter.append(",");
+                                                    filter.append("!META-INF/maven/**");
+                                            }
+                                            if (inc.filter != null) {
+                                                    filter.append(",").append(inc.filter);
+                                            }
+                                            filter.append(")");
+                                            args.add("-injars");
+                                            args.add(filter.toString());
+                                    } else {
+                                            hasInclusionLibrary = true;
+                                            log.debug("--- ADD libraryjars:" + inc.artifactId);
+                                            // This may not be CompileArtifacts, maven 2.0.6 bug
+                                            File file = getClasspathElement(getDependancy(inc, mavenProject), mavenProject);
+                                            inPath.add(file.toString());
+                                            args.add("-libraryjars");
+                                            args.add(fileToString(file));
+                                    }
+                            }
+                    }
 
-		if (log.isDebugEnabled()) {
-			List dependancy = mavenProject.getCompileArtifacts();
-			for (Iterator i = dependancy.iterator(); i.hasNext();) {
-				Artifact artifact = (Artifact) i.next();
-				log.debug("--- compile artifact " + artifact.getGroupId() + ":" + artifact.getArtifactId() + ":"
-						+ artifact.getType() + ":" + artifact.getClassifier() + " Scope:" + artifact.getScope());
-			}
-			for (Iterator i = mavenProject.getArtifacts().iterator(); i.hasNext();) {
-				Artifact artifact = (Artifact) i.next();
-				log.debug("--- artifact " + artifact.getGroupId() + ":" + artifact.getArtifactId() + ":"
-						+ artifact.getType() + ":" + artifact.getClassifier() + " Scope:" + artifact.getScope());
-			}
-			for (Iterator i = mavenProject.getDependencies().iterator(); i.hasNext();) {
-				Dependency artifact = (Dependency) i.next();
-				log.debug("--- dependency " + artifact.getGroupId() + ":" + artifact.getArtifactId() + ":"
-						+ artifact.getType() + ":" + artifact.getClassifier() + " Scope:" + artifact.getScope());
-			}
-		}
+                    if ((!mainIsPom) && inJarFile.exists()) {
+                            args.add("-injars");
+                            StringBuffer filter = new StringBuffer(fileToString(inJarFile));
+                            if ((inFilter != null) || (!addMavenDescriptor)) {
+                                    filter.append("(");
+                                    boolean coma = false;
 
-		Set inPath = new HashSet();
-		boolean hasInclusionLibrary = false;
-		if (assembly != null) {
-			for (Iterator iter = assembly.inclusions.iterator(); iter.hasNext();) {
-				Inclusion inc = (Inclusion) iter.next();
-				if (!inc.library) {
-					File file = getClasspathElement(getDependancy(inc, mavenProject), mavenProject);
-					inPath.add(file.toString());
-					log.debug("--- ADD injars:" + inc.artifactId);
-					StringBuffer filter = new StringBuffer(fileToString(file));
-					filter.append("(!META-INF/MANIFEST.MF");
-					if (!addMavenDescriptor) {
-						filter.append(",");
-						filter.append("!META-INF/maven/**");
-					}
-					if (inc.filter != null) {
-						filter.append(",").append(inc.filter);
-					}
-					filter.append(")");
-					args.add("-injars");
-					args.add(filter.toString());
-				} else {
-					hasInclusionLibrary = true;
-					log.debug("--- ADD libraryjars:" + inc.artifactId);
-					// This may not be CompileArtifacts, maven 2.0.6 bug
-					File file = getClasspathElement(getDependancy(inc, mavenProject), mavenProject);
-					inPath.add(file.toString());
-					args.add("-libraryjars");
-					args.add(fileToString(file));
-				}
-			}
-		}
+                                    if (!addMavenDescriptor) {
+                                            coma = true;
+                                            filter.append("!META-INF/maven/**");
+                                    }
 
-		if ((!mainIsPom) && inJarFile.exists()) {
-			args.add("-injars");
-			StringBuffer filter = new StringBuffer(fileToString(inJarFile));
-			if ((inFilter != null) || (!addMavenDescriptor)) {
-				filter.append("(");
-				boolean coma = false;
+                                    if (inFilter != null) {
+                                            if (coma) {
+                                                    filter.append(",");
+                                            }
+                                            filter.append(inFilter);
+                                    }
 
-				if (!addMavenDescriptor) {
-					coma = true;
-					filter.append("!META-INF/maven/**");
-				}
+                                    filter.append(")");
+                            }
+                            args.add(filter.toString());
+                    }
+                    args.add("-outjars");
+                    args.add(fileToString(outJarFile));
 
-				if (inFilter != null) {
-					if (coma) {
-						filter.append(",");
-					}
-					filter.append(inFilter);
-				}
+                    if (!obfuscate) {
+                            args.add("-dontobfuscate");
+                    }
 
-				filter.append(")");
-			}
-			args.add(filter.toString());
-		}
-		args.add("-outjars");
-		args.add(fileToString(outJarFile));
+                    if (includeDependency) {
+                            List dependency = this.mavenProject.getCompileArtifacts();
+                            for (Iterator i = dependency.iterator(); i.hasNext();) {
+                                    Artifact artifact = (Artifact) i.next();
+                                    // dependency filter
+                                    if (isExclusion(artifact)) {
+                                            continue;
+                                    }
+                                    File file = getClasspathElement(artifact, mavenProject);
 
-		if (!obfuscate) {
-			args.add("-dontobfuscate");
-		}
+                                    if (inPath.contains(file.toString())) {
+                                            log.debug("--- ignore libraryjars since one in injar:" + artifact.getArtifactId());
+                                            continue;
+                                    }
+                                    log.debug("--- ADD libraryjars:" + artifact.getArtifactId());
+                                    args.add("-libraryjars");
+                                    args.add(fileToString(file));
+                            }
+                    }
 
-		if (proguardInclude != null) {
-			if (proguardInclude.exists()) {
-				args.add("-include");
-				args.add(fileToString(proguardInclude));
-				log.debug("proguardInclude " + proguardInclude);
-			} else {
-				log.debug("proguardInclude config does not exists " + proguardInclude);
-			}
-		}
+                    if (libs != null) {
+                            for (Iterator i = libs.iterator(); i.hasNext();) {
+                                    Object lib = i.next();
+                                    args.add("-libraryjars");
+                                    args.add(fileNameToString(lib.toString()));
+                            }
+                    }
 
-		if (includeDependency) {
-			List dependency = this.mavenProject.getCompileArtifacts();
-			for (Iterator i = dependency.iterator(); i.hasNext();) {
-				Artifact artifact = (Artifact) i.next();
-				// dependency filter
-				if (isExclusion(artifact)) {
-					continue;
-				}
-				File file = getClasspathElement(artifact, mavenProject);
+                    args.add("-printmapping");
+                    args.add(fileToString((new File(outputDirectory, "proguard_map.txt").getAbsoluteFile())));
 
-				if (inPath.contains(file.toString())) {
-					log.debug("--- ignore libraryjars since one in injar:" + artifact.getArtifactId());
-					continue;
-				}
-				log.debug("--- ADD libraryjars:" + artifact.getArtifactId());
-				args.add("-libraryjars");
-				args.add(fileToString(file));
-			}
-		}
+                    args.add("-printseeds");
+                    args.add(fileToString((new File(outputDirectory, "proguard_seeds.txt").getAbsoluteFile())));
 
-		if (libs != null) {
-			for (Iterator i = libs.iterator(); i.hasNext();) {
-				Object lib = i.next();
-				args.add("-libraryjars");
-				args.add(fileNameToString(lib.toString()));
-			}
-		}
+                    if (log.isDebugEnabled()) {
+                            args.add("-verbose");
+                    }
 
-		args.add("-printmapping");
-		args.add(fileToString((new File(outputDirectory, "proguard_map.txt").getAbsoluteFile())));
+                    if (options != null) {
+                            for (int i = 0; i < options.length; i++) {
+                                    args.add(options[i]);
+                            }
+                    }
 
-		args.add("-printseeds");
-		args.add(fileToString((new File(outputDirectory, "proguard_seeds.txt").getAbsoluteFile())));
+                    log.info("execute ProGuard " + args.toString());
+                    proguardMain(getProguardJar(this), args, this);
 
-		if (log.isDebugEnabled()) {
-			args.add("-verbose");
-		}
+                    if ((assembly != null) && (hasInclusionLibrary)) {
 
-		if (options != null) {
-			for (int i = 0; i < options.length; i++) {
-				args.add(options[i]);
-			}
-		}
+                            log.info("creating assembly");
 
-		log.info("execute ProGuard " + args.toString());
-		proguardMain(getProguardJar(this), args, this);
+                            File baseFile = new File(outputDirectory, nameNoType(injar) + "_proguard_result.jar");
+                            if (baseFile.exists()) {
+                                    if (!baseFile.delete()) {
+                                            throw new MojoFailureException("Can't delete " + baseFile);
+                                    }
+                            }
+                            File archiverFile = outJarFile.getAbsoluteFile();
+                            if (!outJarFile.renameTo(baseFile)) {
+                                    throw new MojoFailureException("Can't rename " + outJarFile);
+                            }
 
-		if ((assembly != null) && (hasInclusionLibrary)) {
+                            MavenArchiver archiver = new MavenArchiver();
+                            archiver.setArchiver(jarArchiver);
+                            archiver.setOutputFile(archiverFile);
+                            archive.setAddMavenDescriptor(addMavenDescriptor);
 
-			log.info("creating assembly");
+                            try {
+                                    jarArchiver.addArchivedFileSet(baseFile);
 
-			File baseFile = new File(outputDirectory, nameNoType(injar) + "_proguard_result.jar");
-			if (baseFile.exists()) {
-				if (!baseFile.delete()) {
-					throw new MojoFailureException("Can't delete " + baseFile);
-				}
-			}
-			File archiverFile = outJarFile.getAbsoluteFile();
-			if (!outJarFile.renameTo(baseFile)) {
-				throw new MojoFailureException("Can't rename " + outJarFile);
-			}
+                                    for (Iterator iter = assembly.inclusions.iterator(); iter.hasNext();) {
+                                            Inclusion inc = (Inclusion) iter.next();
+                                            if (inc.library) {
+                                                    File file;
+                                                    Artifact artifact = getDependancy(inc, mavenProject);
+                                                    file = getClasspathElement(artifact, mavenProject);
+                                                    if (file.isDirectory()) {
+                                                            getLog().info("merge project: " + artifact.getArtifactId() + " " + file);
+                                                            jarArchiver.addDirectory(file);
+                                                    } else {
+                                                            getLog().info("merge artifact: " + artifact.getArtifactId());
+                                                            jarArchiver.addArchivedFileSet(file);
+                                                    }
+                                            }
+                                    }
 
-			MavenArchiver archiver = new MavenArchiver();
-			archiver.setArchiver(jarArchiver);
-			archiver.setOutputFile(archiverFile);
-			archive.setAddMavenDescriptor(addMavenDescriptor);
+                                    archiver.createArchive(mavenProject, archive);
 
-			try {
-				jarArchiver.addArchivedFileSet(baseFile);
+                            } catch (Exception e) {
+                                    throw new MojoExecutionException("Unable to create jar", e);
+                            }
 
-				for (Iterator iter = assembly.inclusions.iterator(); iter.hasNext();) {
-					Inclusion inc = (Inclusion) iter.next();
-					if (inc.library) {
-						File file;
-						Artifact artifact = getDependancy(inc, mavenProject);
-						file = getClasspathElement(artifact, mavenProject);
-						if (file.isDirectory()) {
-							getLog().info("merge project: " + artifact.getArtifactId() + " " + file);
-							jarArchiver.addDirectory(file);
-						} else {
-							getLog().info("merge artifact: " + artifact.getArtifactId());
-							jarArchiver.addArchivedFileSet(file);
-						}
-					}
-				}
+                    }
 
-				archiver.createArchive(mavenProject, archive);
-
-			} catch (Exception e) {
-				throw new MojoExecutionException("Unable to create jar", e);
-			}
-
-		}
-
-		if (attach && !sameArtifact) {
-			if (useArtifactClassifier()) {
-				projectHelper.attachArtifact(mavenProject, attachArtifactType, attachArtifactClassifier, outJarFile);
-			} else {
-				projectHelper.attachArtifact(mavenProject, attachArtifactType, null, outJarFile);
-			}
-		}
+                    if (attach && !sameArtifact) {
+                            if (useArtifactClassifier()) {
+                                    projectHelper.attachArtifact(mavenProject, attachArtifactType, attachArtifactClassifier, outJarFile);
+                            } else {
+                                    projectHelper.attachArtifact(mavenProject, attachArtifactType, null, outJarFile);
+                            }
+                    }
+                }
 	}
 
 	private static File getProguardJar(ProGuardMojo mojo) throws MojoExecutionException {
